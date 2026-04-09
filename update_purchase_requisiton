@@ -1,0 +1,346 @@
+ METHOD update_purchase_requisition.
+
+    DATA: lo_http    TYPE REF TO if_http_client,
+          lo_http1   TYPE REF TO if_http_client,
+          io_client  TYPE REF TO if_http_client,
+          lo_csrf    TYPE REF TO zcl_fiaf27_solpedaf,
+          iv_root    TYPE string,
+          lv_csrf    TYPE string,
+          lv_cookie  TYPE string,
+          lv_etag    TYPE string,
+          lo_req     TYPE REF TO if_http_request,
+          lo_res     TYPE REF TO if_http_response,
+          lt_fields  TYPE tihttpnvp,
+          lt_cookies TYPE tihttpcki,
+          ls_field   TYPE ihttpnvp,
+          lv_lang    TYPE string,
+          lv_mandt   TYPE string,
+          lv_cr_lf   TYPE string.
+    CONSTANTS: lc_a TYPE c LENGTH 1 VALUE 'A'.
+
+*    IF lc_a = ' '.
+    lv_cr_lf = cl_abap_char_utilities=>cr_lf.
+    lv_mandt = CONV #( sy-mandt ).
+    CALL METHOD cl_i18n_languages=>sap1_to_iso639_1
+      EXPORTING
+        im_lang_sap1   = sy-langu             " SAP Language code
+      IMPORTING
+        ex_lang_iso639 = DATA(lv_langu).            " Language according to ISO 639.
+    lv_lang = CONV #( lv_langu ).
+
+    " Create http client using RFC destination for Get calls
+    cl_http_client=>create_by_destination(
+  EXPORTING
+    destination              = iv_rfc_dest
+  IMPORTING
+    client                   = io_client
+  EXCEPTIONS
+    argument_not_found       = 1
+    destination_not_found    = 2
+    destination_no_authority = 3
+    plugin_not_active        = 4
+    internal_error           = 5
+    OTHERS                   = 6
+)
+.
+    io_client->request->set_method( if_http_request=>co_request_method_get ).
+    io_client->request->set_header_field( name = lc_token value = lc_fetch ).
+    io_client->request->set_header_field( name = lc_accept value = lc_appj ).
+    io_client->request->set_header_field( name = 'content-type' value = lc_appj ).
+    io_client->request->set_header_field( name = 'OData-Version' value = '4.0' ).
+    io_client->propertytype_logon_popup = if_http_client=>co_disabled.
+    io_client->request->set_header_field( name = 'sap-client'   value = lv_mandt ).
+    io_client->request->set_header_field( name = 'sap-language' value = lv_lang ).
+    io_client->request->set_header_field( name = lc_uri value = 'api_purchaserequisition_2/srvd_a2x/sap/purchaserequisition/0001' ).
+    " io_client->request->set_header_field( name = lc_uri value = |$batch?sap-client={ sy-mandt }&sap-language={ lv_lang }| ).
+    io_client->send(  ).
+    io_client->receive(  ).
+
+*      "Read token
+    lv_csrf = io_client->response->get_header_field( lc_token ).
+    lv_etag = io_client->response->get_header_field( lc_etag ).
+    DATA(lv_body1) = io_client->response->get_cdata( ).
+    io_client->response->get_cookies(
+  CHANGING
+    cookies         =   lt_cookies               " Cookies
+).
+
+    " Create http client using RFC destination for patch calls
+    cl_http_client=>create_by_destination(
+  EXPORTING
+    destination              = iv_rfc_dest
+  IMPORTING
+    client                   = lo_http
+  EXCEPTIONS
+    argument_not_found       = 1
+    destination_not_found    = 2
+    destination_no_authority = 3
+    plugin_not_active        = 4
+    internal_error           = 5
+    OTHERS                   = 6
+)
+.
+    "Prepare request for Get call
+**      lo_http->request->set_method( if_http_request=>co_request_method_get ).
+**    lo_http->request->set_header_field( name = lc_token value = lc_fetch ).
+**    lo_http->request->set_header_field( name = 'sap-client'   value = lv_mandt ).
+**    lo_http->send( ).
+**    lo_http->receive( ).
+**    lv_csrf = lo_http->response->get_header_field( lc_token ).
+
+    lo_http->request->set_method( 'POST' ).
+    lo_http->request->set_header_field( name = lc_token value = lv_csrf ).
+    lo_http->request->set_header_field( name = 'sap-language' value = lv_lang ).
+    lo_http->request->set_header_field( name = 'sap-client'   value = lv_mandt ).
+    " lo_http->request->set_header_field( name = 'content-type' value = lc_appj ).
+    lo_http->request->set_header_field( name = 'content-type' value = 'multipart/mixed; boundary=batch' ).
+    " lo_http->request->set_header_field( name = lc_accept       value = lc_appj ).
+    lo_http->request->set_header_field( name = 'OData-Version' value = '4.0' ).
+    lo_http->propertytype_logon_popup = if_http_client=>co_disabled.
+*    lo_http->request->set_header_field( name = 'if-match' value = '*' ).
+    "Begin of code for Account Assignment Update
+    "IF iv_aa_cat NE lc_a.
+    " perform get
+
+    " perform patch for accountassignmentcategory
+*        lo_http->request->set_header_field(  name = lc_token value = lv_csrf ).
+    LOOP AT lt_cookies INTO DATA(ls_cookie).
+      lo_http->request->set_cookie(
+        name            =   ls_cookie-name               " Name of cookie
+        path            =   ls_cookie-path              " Path of Cookie
+        value           =    ls_cookie-value              " Cookie value
+        domain          =  ls_cookie-xdomain               " Domain Name of Cookie
+*    expires         = ``               " Cookie expiry date
+*    secure          = 0                " 0: unsaved; 1:saved
+*    cookie_encoding = 0                " 0: URL encoded, 1: unencoded
+      ).
+    ENDLOOP.
+*    lo_http->request->set_header_field( name = lc_uri value = |PurchaseReqnItem(PurchaseRequisition='{ iv_pr }',PurchaseRequisitionItem='{ iv_pr_item }')?sap-client={ sy-mandt }&sap-language={ lv_lang }| ).
+*    DATA(lv_payload) = |\{ "AccountAssignmentCategory" : "{ iv_aa_cat }" \}|.
+    lo_http->request->set_header_field( name = lc_uri value = 'api_purchaserequisition_2/srvd_a2x/sap/purchaserequisition/0001/$batch' ).
+
+    DATA(lv_distribution) = ' '.
+    IF lines( iv_asset ) > 1.
+      lv_distribution = 1.
+    ENDIF.
+    " 1. Start of Batch and the initial GET request
+    DATA(lv_payload) = |--batch| && lv_cr_lf &&
+
+                 |Content-Type: application/http| && lv_cr_lf &&
+                 |Content-Transfer-Encoding: binary| && lv_cr_lf &&
+                 lv_cr_lf &&
+
+                 |GET PurchaseReqnItem(PurchaseRequisition='{ iv_pr }',PurchaseRequisitionItem='{ iv_pr_item }') HTTP/1.1| && lv_cr_lf &&
+                 lv_cr_lf &&
+                 lv_cr_lf &&
+
+                 |--batch| && lv_cr_lf &&
+                 |Content-Type: multipart/mixed; boundary=changeset| && lv_cr_lf &&
+                 lv_cr_lf &&
+
+
+                 |--changeset| && lv_cr_lf &&
+                 |Content-Type: application/http| && lv_cr_lf &&
+                 |Content-Transfer-Encoding: binary| && lv_cr_lf &&
+                 |Content-ID: 1| && lv_cr_lf &&
+                 lv_cr_lf &&
+
+                 |PATCH PurchaseReqnItem(PurchaseRequisition='{ iv_pr }',PurchaseRequisitionItem='{ iv_pr_item }') HTTP/1.1| && lv_cr_lf &&
+                 |Content-Type: application/json| && lv_cr_lf &&
+                 |If-Match: *| && lv_cr_lf &&
+                 lv_cr_lf &&
+
+                 |\{ "AccountAssignmentCategory" : "A", "MultipleAcctAssgmtDistribution" : "{ lv_distribution }" \}| && lv_cr_lf &&
+                 lv_cr_lf.
+
+    " 4. LOOP for Account Assignments (Dynamic Part)
+    " We start from 1 up to your variable 'lv_count'
+    DATA(lv_count) = iv_assignments .
+    DATA(lv_count_create) = lines( iv_asset ) - iv_assignments.
+    DO lv_count TIMES.
+      DATA(lv_index) = sy-index.
+      " Format index to 2 digits (e.g., 01, 02) for the OData key
+      " DATA(lv_index_str) = |{ lv_index WIDTH = 2 ALIGN = RIGHT PAD = '0' }|.
+
+      " Each assignment needs a unique Content-ID (starting after the first PATCH, so index + 1)
+      DATA(lv_content_id) = lv_index + 1.
+      " data(lv_a_num) = |{ lv_index ALPHA = IN }|.
+      lv_payload = lv_payload &&
+
+                   lv_cr_lf &&
+                   |--changeset| && lv_cr_lf &&
+                   |Content-Type: application/http| && lv_cr_lf &&
+                   |Content-Transfer-Encoding: binary| && lv_cr_lf &&
+                   |Content-ID: { lv_content_id }| && lv_cr_lf &&
+                   lv_cr_lf &&
+
+                   |PATCH PurchaseReqnAcctAssgmt(PurchaseRequisition='{ iv_pr }',PurchaseRequisitionItem='{ iv_pr_item }',PurchaseReqnAcctAssgmtNumber='{ lv_index }') HTTP/1.1| && lv_cr_lf &&
+                   |Content-Type: application/json| && lv_cr_lf &&
+                   |If-Match: *| && lv_cr_lf &&
+                   lv_cr_lf &&
+
+                   |\{ | &&
+                   |"MasterFixedAsset" : "{ iv_asset[ lv_index ]-asset }", | &&
+                   |"CostCenter" : "{ iv_asset[ lv_index ]-cc }", | &&
+                   |"BaseUnitISOCode" : "{ iv_isocode }", | &&
+                   |"Quantity" : 1 | &&
+                   |\}| && lv_cr_lf &&
+                   lv_cr_lf.
+    ENDDO.
+    DATA(lv_assign_num) = iv_assignments.
+    DO lv_count_create TIMES.
+      lv_assign_num = lv_assign_num + 1.
+      lv_content_id = lv_content_id + 1.
+      " data(lv_a_num1) = |{ lv_assign_num ALPHA = IN }|.
+      lv_payload = lv_payload &&
+
+                   lv_cr_lf &&
+                   |--changeset| && lv_cr_lf &&
+                   |Content-Type: application/http| && lv_cr_lf &&
+                   |Content-Transfer-Encoding: binary| && lv_cr_lf &&
+                   |Content-ID: { lv_content_id }| && lv_cr_lf &&
+                   lv_cr_lf &&
+
+                   |POST PurchaseReqnAcctAssgmt HTTP/1.1| && lv_cr_lf &&
+                   |Content-Type: application/json| && lv_cr_lf &&
+                   |If-Match: *| && lv_cr_lf &&
+                   lv_cr_lf &&
+
+                   |\{ | &&
+                   |"PurchaseRequisition" : "{ iv_pr }", | &&
+                   |"PurchaseRequisitionItem" : "{ iv_pr_item }", | &&
+                   |"PurchaseReqnAcctAssgmtNumber" : "{ lv_assign_num }", | &&
+                   |"MasterFixedAsset" : "{ iv_asset[ lv_assign_num ]-asset }", | &&
+                   |"CostCenter" : "{ iv_asset[ lv_assign_num ]-cc }", | &&
+                   |"BaseUnitISOCode" : "{ iv_isocode }", | &&
+                   |"Quantity" : 1 | &&
+                   |\}| && lv_cr_lf &&
+                   lv_cr_lf.
+
+    ENDDO.
+
+    " 5. Close Changeset and Close Batch
+    lv_payload = lv_payload &&
+
+                 |--changeset--| && lv_cr_lf &&
+                 lv_cr_lf &&
+                 |--batch--|.
+
+
+    "DATA(lv_payload) = '{ "AccountAssignmentCategory": "' && iv_aa_cat && '", "MasterFixedAsset" : "' && iv_asset && '" }'.
+    lo_http->request->set_cdata( data = lv_payload ).
+    lo_http->send( ).
+    lo_http->receive( ).
+    lo_http->response->get_status(
+   IMPORTING code = DATA(lv_code)
+   reason = DATA(lv_reason)  ).
+    DATA: lv_code1 TYPE string.
+    lv_code1 = CONV #( lv_code ).
+    CONCATENATE lv_code1 lv_reason INTO ev_res SEPARATED BY space.
+    DATA(lv_body) = lo_http->response->get_cdata(  ).
+
+    DATA lv_pos1 TYPE i.
+    DATA lv_pos2 TYPE i.
+
+" Find sap-messages block
+FIND 'sap-messages:' IN lv_body MATCH OFFSET lv_pos1.
+IF sy-subrc = 0.
+
+  " Find message value after it
+
+  FIND FIRST OCCURRENCE OF REGEX '"message":"([^"]+)"'
+
+    IN lv_body
+
+    MATCH OFFSET lv_pos1
+
+    SUBMATCHES ev_body.
+
+ENDIF.
+    " ENDIF.
+    "End of code for account assignment update
+
+
+
+**    IF lv_code IS INITIAL OR (  lv_code  >= 200 AND lv_code < 300 ).
+**      "Begin of code for Asset Update
+**      io_client->request->set_header_field( name = lc_uri value = |PurchaseReqnAcctAssgmt(PurchaseRequisition='{ iv_pr }',PurchaseRequisitionItem='{ iv_pr_item }',PurchaseReqnAcctAssgmtNumber='{ iv_aa_number }')?sap-client={ sy-mandt }&sap-language={
+**   lv_lang }| ).
+**
+**      io_client->send(  ).
+**      io_client->receive(  ).
+**
+**      "Read token
+***    CLEAR: lv_csrf,lv_etag,lv_body1,lt_cookies.
+**      lv_csrf = io_client->response->get_header_field( lc_token ).
+**      lv_etag = io_client->response->get_header_field( lc_etag ).
+**      DATA(lv_body1) = io_client->response->get_cdata( ).
+**      "Read cookie
+**      io_client->response->get_cookies(
+***     EXPORTING
+***       cookie_encoding = 0                " 0: URL unencoded, 1: not unencoded
+**        CHANGING
+**          cookies         =   lt_cookies               " Cookies
+**      ).
+**      " Prepare for patch
+**
+**      lo_http->request->set_header_field(  name = lc_token value = lv_csrf ).
+**      LOOP AT lt_cookies INTO DATA(ls_cookie).
+**        lo_http->request->set_cookie(
+**          name            =   ls_cookie-name               " Name of cookie
+**          path            =   ls_cookie-path              " Path of Cookie
+**          value           =    ls_cookie-value              " Cookie value
+**          domain          =  ls_cookie-xdomain               " Domain Name of Cookie
+***    expires         = ``               " Cookie expiry date
+***    secure          = 0                " 0: unsaved; 1:saved
+***    cookie_encoding = 0                " 0: URL encoded, 1: unencoded
+**        ).
+**      ENDLOOP.
+**
+**      lo_http->request->set_header_field( name = lc_uri value = |PurchaseReqnAcctAssgmt(PurchaseRequisition='{ iv_pr }',PurchaseRequisitionItem='{ iv_pr_item }',PurchaseReqnAcctAssgmtNumber='{ iv_aa_number }')?sap-client={ sy-mandt }&sap-language={
+**      lv_lang }| ).
+**      lv_payload = |\{ "MasterFixedAsset" : "{ iv_asset[ 1 ]-asset }" \}|.
+**      "DATA(lv_payload) = '{ "AccountAssignmentCategory": "' && iv_aa_cat && '", "MasterFixedAsset" : "' && iv_asset && '" }'.
+**      lo_http->request->set_cdata( data = lv_payload ).
+**
+**      lo_http->send(
+***      EXPORTING
+***        timeout                    = co_timeout_default
+***      EXCEPTIONS
+***        http_communication_failure = 1
+***        http_invalid_state         = 2
+***        http_processing_failed     = 3
+***        http_invalid_timeout       = 4
+***        others                     = 5
+**      ).
+**      IF sy-subrc <> 0.
+***     MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+***       WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+**      ENDIF.
+**      lo_http->receive(
+***      EXCEPTIONS
+***        http_communication_failure = 1
+***        http_invalid_state         = 2
+***        http_processing_failed     = 3
+***        others                     = 4
+**      ).
+**      IF sy-subrc <> 0.
+***     MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+***       WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+**      ENDIF.
+**
+**      lo_http->response->get_status(
+**     IMPORTING code = lv_code
+**     reason = lv_reason  ).
+***    DATA: lv_code1 TYPE string.
+**      lv_code1 = CONV #( lv_code ).
+**      CONCATENATE lv_code1 lv_reason INTO ev_res SEPARATED BY space.
+**      lv_body = lo_http->response->get_cdata(  ).
+**    ENDIF.
+    lo_http->close(  ).
+    io_client->close(  ).
+    FREE:lo_http,io_client.
+*    ENDIF.
+
+
+  ENDMETHOD.
