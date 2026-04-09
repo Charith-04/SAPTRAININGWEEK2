@@ -1,66 +1,240 @@
-LOOP AT lt_group INTO DATA(ls_group).
+METHOD save_modified.
  
-  CLEAR: lt_return_fm, lt_result_fm.
+  DATA: lt_return TYPE ztt_bapiret2,
+
+        lt_result TYPE zttasset_create_out.
  
-  CALL FUNCTION 'ZFM_ASSET_CR_AND_PR_UPD' DESTINATION 'NONE'
+*--------------------------------------
 
-    EXPORTING
+* Types
 
-      iv_pr          = ls_group-pr
+*--------------------------------------
 
-      iv_pr_item     = ls_group-pr_item
+  TYPES: BEGIN OF ty_cc_split,
 
-      iv_quantity    = ls_group-total_qty
+           costcenter TYPE kostl,
 
-      iv_description = ls_group-description
+           qty        TYPE ebkn-menge,
 
-      iv_isocode     = ls_group-isocode
-
-      iv_assign      = ls_group-assign
-
-    IMPORTING
-
-      et_return      = lt_return_fm
-
-      et_result      = lt_result_fm
-
-    TABLES
-
-      it_cc_split    = ls_group-cc_split.
+         END OF ty_cc_split.
  
-  LOOP AT lt_return_fm INTO DATA(ls_return).
+  TYPES: ty_t_cc_split TYPE STANDARD TABLE OF ty_cc_split WITH EMPTY KEY.
  
-    DATA(lv_severity) = COND #(
+  TYPES: BEGIN OF ty_group,
 
-      WHEN ls_return-type = 'E' OR ls_return-type = 'A'
+           pr          TYPE i_purchaserequisitionitem-purchaserequisition,
 
-        THEN if_abap_behv_message=>severity-error
+           pr_item     TYPE i_purchaserequisitionitem-purchaserequisitionitem,
 
-      WHEN ls_return-type = 'W'
+           total_qty   TYPE ebkn-menge,
 
-        THEN if_abap_behv_message=>severity-warning
+           description TYPE ztactivos_fijos-comentario,
 
-      ELSE
+           isocode     TYPE a_purchaserequisitionitem_2-baseunitisocode,
 
-        if_abap_behv_message=>severity-success
+           assign      TYPE ebkn-zebkn,
 
-    ).
+           cc_split    TYPE ty_t_cc_split,
+
+         END OF ty_group.
  
-    " 👉 Add PR + ITEM here
+  DATA: lt_group TYPE STANDARD TABLE OF ty_group,
 
-    DATA(lv_text) = |PR { ls_group-pr } Item { ls_group-pr_item }: { ls_return-message }|.
+        ls_group TYPE ty_group.
  
-    DATA(lo_msg) = new_message_with_text(
+*--------------------------------------
 
-      severity = lv_severity
+* Build grouping + split
 
-      text     = lv_text
+*--------------------------------------
 
-    ).
+  LOOP AT gt_pr_data INTO DATA(ls_data).
  
-    APPEND VALUE #( %msg = lo_msg ) TO reported.
+    READ TABLE lt_group ASSIGNING FIELD-SYMBOL(<ls_group>)
+
+      WITH KEY pr      = ls_data-purchaserequisition
+
+               pr_item = ls_data-purchaserequisitionitem.
+ 
+    IF sy-subrc = 0.
+ 
+      <ls_group>-total_qty += ls_data-quantity.
+ 
+      APPEND VALUE #( 
+
+        costcenter = ls_data-costcenter
+
+        qty        = ls_data-quantity
+
+      ) TO <ls_group>-cc_split.
+ 
+    ELSE.
+ 
+      CLEAR ls_group.
+ 
+      ls_group-pr          = ls_data-purchaserequisition.
+
+      ls_group-pr_item     = ls_data-purchaserequisitionitem.
+
+      ls_group-total_qty   = ls_data-quantity.
+
+      ls_group-description = ls_data-comentario.
+
+      ls_group-isocode     = ls_data-baseunitisocode.
+
+      ls_group-assign      = ls_data-purchasereqnacctassgmtnumber.
+ 
+      APPEND VALUE #(
+
+        costcenter = ls_data-costcenter
+
+        qty        = ls_data-quantity
+
+      ) TO ls_group-cc_split.
+ 
+      APPEND ls_group TO lt_group.
+ 
+    ENDIF.
  
   ENDLOOP.
  
-ENDLOOP.
+*--------------------------------------
+
+* Processing
+
+*--------------------------------------
+
+  DATA: lt_return_fm TYPE ztt_bapiret2,
+
+        lt_result_fm TYPE zttasset_create_out.
+ 
+  DATA: lv_success TYPE i VALUE 0,
+
+        lv_error   TYPE i VALUE 0.
+ 
+  LOOP AT lt_group INTO ls_group.
+ 
+    CLEAR: lt_return_fm, lt_result_fm.
+ 
+    CALL FUNCTION 'ZFM_ASSET_CR_AND_PR_UPD' DESTINATION 'NONE'
+
+      EXPORTING
+
+        iv_pr          = ls_group-pr
+
+        iv_pr_item     = ls_group-pr_item
+
+        iv_quantity    = ls_group-total_qty
+
+        iv_description = ls_group-description
+
+        iv_isocode     = ls_group-isocode
+
+        iv_assign      = ls_group-assign
+
+      IMPORTING
+
+        et_return      = lt_return_fm
+
+        et_result      = lt_result_fm
+
+      TABLES
+
+        it_cc_split    = ls_group-cc_split.
+ 
+*--------------------------------------
+
+* Message Handling per PR Item
+
+*--------------------------------------
+
+    DATA(lv_has_error) = abap_false.
+ 
+    LOOP AT lt_return_fm INTO DATA(ls_return).
+ 
+      IF ls_return-type = 'E' OR ls_return-type = 'A'.
+
+        lv_has_error = abap_true.
+
+        EXIT.
+
+      ENDIF.
+ 
+    ENDLOOP.
+ 
+    IF lv_has_error = abap_true.
+
+      lv_error += 1.
+ 
+      APPEND VALUE #(
+
+        %msg = new_message_with_text(
+
+          severity = if_abap_behv_message=>severity-error
+
+          text = |PR { ls_group-pr } Item { ls_group-pr_item }: Failed|
+
+        )
+
+      ) TO reported.
+ 
+    ELSE.
+
+      lv_success += 1.
+ 
+      APPEND VALUE #(
+
+        %msg = new_message_with_text(
+
+          severity = if_abap_behv_message=>severity-success
+
+          text = |PR { ls_group-pr } Item { ls_group-pr_item }: Processed successfully|
+
+        )
+
+      ) TO reported.
+ 
+    ENDIF.
+ 
+  ENDLOOP.
+ 
+*--------------------------------------
+
+* Final Summary (single clean message)
+
+*--------------------------------------
+
+  IF lv_error = 0.
+ 
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+        severity = if_abap_behv_message=>severity-success
+
+        text = |All { lv_success } items processed successfully|
+
+      )
+
+    ) TO reported.
+ 
+  ELSE.
+ 
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+        severity = if_abap_behv_message=>severity-warning
+
+        text = |{ lv_success } success, { lv_error } failed|
+
+      )
+
+    ) TO reported.
+ 
+  ENDIF.
+ 
+  CLEAR gt_pr_data.
+ 
+ENDMETHOD.
  
