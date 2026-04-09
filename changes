@@ -60,7 +60,7 @@ METHOD save_modified.
  
       <ls_group>-total_qty += ls_data-quantity.
  
-      APPEND VALUE #( 
+      APPEND VALUE #(
 
         costcenter = ls_data-costcenter
 
@@ -108,10 +108,6 @@ METHOD save_modified.
 
         lt_result_fm TYPE zttasset_create_out.
  
-  DATA: lv_success TYPE i VALUE 0,
-
-        lv_error   TYPE i VALUE 0.
- 
   LOOP AT lt_group INTO ls_group.
  
     CLEAR: lt_return_fm, lt_result_fm.
@@ -144,95 +140,59 @@ METHOD save_modified.
  
 *--------------------------------------
 
-* Message Handling per PR Item
+* Pick only ONE message (lv_body from FM)
 
 *--------------------------------------
 
-    DATA(lv_has_error) = abap_false.
+    READ TABLE lt_return_fm INTO DATA(ls_return) INDEX 1.
  
-    LOOP AT lt_return_fm INTO DATA(ls_return).
+    DATA(lv_text) = COND string(
+
+      WHEN ls_return-message IS NOT INITIAL
+
+        THEN ls_return-message
+
+      ELSE
+
+        |No response|
+
+    ).
  
-      IF ls_return-type = 'E' OR ls_return-type = 'A'.
+    DATA(lv_severity) = COND #(
 
-        lv_has_error = abap_true.
+      WHEN ls_return-type = 'E' OR ls_return-type = 'A'
 
-        EXIT.
+        THEN if_abap_behv_message=>severity-error
 
-      ENDIF.
+      ELSE
+
+        if_abap_behv_message=>severity-success
+
+    ).
  
-    ENDLOOP.
+*--------------------------------------
+
+* Bind message to RAP key
+
+*--------------------------------------
+
+    READ TABLE keys INTO DATA(ls_key) INDEX sy-tabix.
  
-    IF lv_has_error = abap_true.
+    APPEND VALUE #(
 
-      lv_error += 1.
- 
-      APPEND VALUE #(
+      %tky = ls_key-%tky
 
-        %msg = new_message_with_text(
+      %msg = new_message_with_text(
 
-          severity = if_abap_behv_message=>severity-error
+        severity = lv_severity
 
-          text = |PR { ls_group-pr } Item { ls_group-pr_item }: Failed|
+        text = |PR { ls_group-pr } Item { ls_group-pr_item }: { lv_text }|
 
-        )
+      )
 
-      ) TO reported.
- 
-    ELSE.
-
-      lv_success += 1.
- 
-      APPEND VALUE #(
-
-        %msg = new_message_with_text(
-
-          severity = if_abap_behv_message=>severity-success
-
-          text = |PR { ls_group-pr } Item { ls_group-pr_item }: Processed successfully|
-
-        )
-
-      ) TO reported.
- 
-    ENDIF.
+    ) TO reported-<your_entity>.
  
   ENDLOOP.
- 
-*--------------------------------------
-
-* Final Summary (single clean message)
-
-*--------------------------------------
-
-  IF lv_error = 0.
- 
-    APPEND VALUE #(
-
-      %msg = new_message_with_text(
-
-        severity = if_abap_behv_message=>severity-success
-
-        text = |All { lv_success } items processed successfully|
-
-      )
-
-    ) TO reported.
- 
-  ELSE.
- 
-    APPEND VALUE #(
-
-      %msg = new_message_with_text(
-
-        severity = if_abap_behv_message=>severity-warning
-
-        text = |{ lv_success } success, { lv_error } failed|
-
-      )
-
-    ) TO reported.
- 
-  ENDIF.
  
   CLEAR gt_pr_data.
  
