@@ -1,0 +1,114 @@
+*--------------------------------------
+
+* Count success and failed assets
+
+*--------------------------------------
+
+DATA lv_success_count TYPE i.
+
+DATA lv_error_count   TYPE i.
+ 
+LOOP AT lt_result_all INTO DATA(ls_result).
+
+  IF ls_result-status = 'S'.
+
+    lv_success_count = lv_success_count + 1.
+
+  ELSE.
+
+    lv_error_count = lv_error_count + 1.
+
+  ENDIF.
+
+ENDLOOP.
+ 
+*--------------------------------------
+
+* Show one summary per PR item
+
+*--------------------------------------
+
+LOOP AT lt_group INTO ls_group.
+ 
+  " Asset creation summary
+
+  IF lv_success_count > 0.
+
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+               severity = if_abap_behv_message=>severity-success
+
+               text     = |PR { ls_group-pr } / Item { ls_group-pr_item }: | &&
+
+                          |{ lv_success_count } asset(s) created successfully| )
+
+    ) TO reported-errores.
+
+  ENDIF.
+ 
+  IF lv_error_count > 0.
+
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+               severity = if_abap_behv_message=>severity-error
+
+               text     = |PR { ls_group-pr } / Item { ls_group-pr_item }: | &&
+
+                          |{ lv_error_count } asset(s) failed to create| )
+
+    ) TO reported-errores.
+
+  ENDIF.
+ 
+ENDLOOP.
+ 
+*--------------------------------------
+
+* Show SAP PR update message once
+
+*--------------------------------------
+
+LOOP AT lt_return_all INTO DATA(ls_ret)
+
+  WHERE type = 'S' AND message CS 'solicitud'.
+ 
+  APPEND VALUE #(
+
+    %msg = new_message_with_text(
+
+             severity = if_abap_behv_message=>severity-success
+
+             text     = ls_ret-message )
+
+  ) TO reported-errores.
+ 
+  EXIT.  " Only once
+ 
+ENDLOOP.
+ 
+*--------------------------------------
+
+* Show any errors from PR update
+
+*--------------------------------------
+
+LOOP AT lt_return_all INTO ls_ret
+
+  WHERE type = 'E' OR type = 'A'.
+ 
+  APPEND VALUE #(
+
+    %msg = new_message_with_text(
+
+             severity = if_abap_behv_message=>severity-error
+
+             text     = ls_ret-message )
+
+  ) TO reported-errores.
+ 
+ENDLOOP.
+ 
