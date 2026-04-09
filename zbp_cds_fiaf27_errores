@@ -1,0 +1,599 @@
+CLASS lsc_zcds_fiaf27_errores DEFINITION INHERITING FROM cl_abap_behavior_saver.
+
+  "=========
+  PUBLIC SECTION.
+
+    CLASS-DATA: gt_pr_data TYPE zcl_fiaf27_solpedaf=>ty_t_purchase_req.
+
+  PROTECTED SECTION.
+
+    METHODS save_modified REDEFINITION.
+
+
+ENDCLASS.
+
+CLASS lsc_zcds_fiaf27_errores IMPLEMENTATION.
+
+  METHOD save_modified.
+
+  DATA: lt_return TYPE ztt_bapiret2,
+
+        lt_result TYPE zttasset_create_out.
+
+*--------------------------------------
+
+* Cost center split structure
+
+*--------------------------------------
+
+  TYPES: BEGIN OF ty_cc_split,
+
+           costcenter TYPE kostl,
+
+           qty        TYPE ebkn-menge,
+
+         END OF ty_cc_split.
+
+  TYPES: ty_t_cc_split TYPE STANDARD TABLE OF ty_cc_split WITH EMPTY KEY.
+
+*--------------------------------------
+
+* Group structure
+
+*--------------------------------------
+
+  TYPES: BEGIN OF ty_group,
+
+           pr          TYPE i_purchaserequisitionitem-purchaserequisition,
+
+           pr_item     TYPE i_purchaserequisitionitem-purchaserequisitionitem,
+
+           total_qty   TYPE ebkn-menge,
+
+           description TYPE ztactivos_fijos-comentario,
+
+           isocode     TYPE a_purchaserequisitionitem_2-baseunitisocode,
+
+           assign      TYPE ebkn-zebkn,
+
+           cc_split    TYPE ty_t_cc_split,
+
+         END OF ty_group.
+
+  DATA: lt_group TYPE STANDARD TABLE OF ty_group,
+
+        ls_group TYPE ty_group.
+
+*--------------------------------------
+
+* Build grouping + split
+
+*--------------------------------------
+
+  LOOP AT gt_pr_data INTO DATA(ls_data).
+
+    READ TABLE lt_group ASSIGNING FIELD-SYMBOL(<ls_group>)
+
+      WITH KEY
+
+        pr      = ls_data-purchaserequisition
+
+        pr_item = ls_data-purchaserequisitionitem.
+
+    IF sy-subrc = 0.
+
+      <ls_group>-total_qty = <ls_group>-total_qty + ls_data-quantity.
+
+      APPEND VALUE #(
+
+        costcenter = ls_data-costcenter
+
+        qty        = ls_data-quantity
+
+      ) TO <ls_group>-cc_split.
+
+
+
+    ELSE.
+
+      CLEAR ls_group.
+
+      ls_group-pr          = ls_data-purchaserequisition.
+
+      ls_group-pr_item     = ls_data-purchaserequisitionitem.
+
+      ls_group-total_qty   = ls_data-quantity.
+
+      ls_group-description = ls_data-comentario.
+
+      ls_group-isocode     = ls_data-baseunitisocode.
+
+      ls_group-assign      = ls_data-purchasereqnacctassgmtnumber.
+
+      APPEND VALUE #(
+
+        costcenter = ls_data-costcenter
+
+        qty        = ls_data-quantity
+
+      ) TO ls_group-cc_split.
+
+      APPEND ls_group TO lt_group.
+
+    ENDIF.
+
+  ENDLOOP.
+
+*--------------------------------------
+
+* Call FM once per PR item
+
+*--------------------------------------
+
+  DATA: lt_return_all TYPE ztt_bapiret2,
+
+        lt_result_all TYPE zttasset_create_out.
+      DATA: lt_return_fm TYPE ztt_bapiret2,
+
+          lt_result_fm TYPE zttasset_create_out.
+*  DATA(lo_api) = NEW zcl_fiaf27_solpedaf( ).
+
+
+
+  LOOP AT lt_group INTO ls_group.
+
+
+
+    CALL FUNCTION 'ZFM_ASSET_CR_AND_PR_UPD' DESTINATION 'NONE'
+
+      EXPORTING
+
+        iv_pr          = ls_group-pr
+
+        iv_pr_item     = ls_group-pr_item
+
+        iv_quantity    = ls_group-total_qty
+
+        iv_description = ls_group-description
+
+        iv_isocode     = ls_group-isocode
+
+        iv_assign      = ls_group-assign
+
+
+
+      IMPORTING
+
+        et_return      = lt_return_fm
+
+        et_result      = lt_result_fm
+          TABLES
+
+        it_cc_split    = ls_group-cc_split.   " <-- NEW
+*        EXCEPTIONS
+*        system_FAILURE = 1 MESSAGE lv_rfc_msg
+*        commUNICATION_FAILURE = 2 MESSAGE lv_rfc_msg
+*        resource_failure = 3
+*        otHERS = 4.
+
+
+*lo_api->update_purchase_requisition(
+*  EXPORTING
+*    iv_rfc_dest    = 'ZRFC_FIAF27_API_PUR_REQ'
+*    iv_pr          = ls_group-pr
+*    iv_pr_item     = ls_group-pr_item
+**    iv_aa_cat      =
+**    iv_aa_number   =
+*    iv_asset       =
+*    iv_isocode     =
+*    iv_assignments =
+**  IMPORTING
+**    ev_body        =
+**  RECEIVING
+**    ev_res         =
+*).
+
+    APPEND LINES OF lt_return_fm TO lt_return_all.
+
+    APPEND LINES OF lt_result_fm TO lt_result_all.
+
+
+  ENDLOOP.
+
+  lt_return = lt_return_all.
+
+  lt_result = lt_result_all.
+
+*  CLEAR gt_pr_data.
+
+LOOP AT lt_return_all INTO DATA(ls_return).
+DATA(lv_severity) = COND #(
+WHEN ls_return-type = 'E' OR ls_return-type = 'A' THEN if_abap_behv_message=>severity-error
+WHEN ls_return-type = 'W' THEN if_abap_behv_message=>severity-warning
+ELSE if_abap_behv_message=>severity-success
+).
+DATA(lo_msg) = new_message( id = ls_return-id number = ls_return-number severity = lv_severity
+v1 =  ls_return-message
+v2 = ls_return-message_v1
+v3 = ls_return-message_v2
+v4 = ls_return-message_v3 ).
+
+APPEND value #( %msg = lo_msg ) TO reported-errores.
+
+ENDLOOP.
+    "data(lo_dest) = cl_bgmc_process_factory
+
+CLEAR gt_pr_data.
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+CLASS lhc_errores DEFINITION INHERITING FROM cl_abap_behavior_handler.
+  PRIVATE SECTION.
+
+    METHODS get_instance_authorizations FOR INSTANCE AUTHORIZATION
+      IMPORTING keys REQUEST requested_authorizations FOR errores RESULT result.
+
+    METHODS createasset FOR MODIFY
+      IMPORTING keys FOR ACTION errores~createasset RESULT result.
+    METHODS createonlyasset FOR MODIFY
+      IMPORTING keys FOR ACTION errores~createonlyasset RESULT result.
+
+    "METHODS logerror FOR MODIFY
+    " IMPORTING keys FOR ACTION errores~logerror.
+
+ENDCLASS.
+
+CLASS lhc_errores IMPLEMENTATION.
+
+  METHOD get_instance_authorizations.
+  ENDMETHOD.
+
+  METHOD createasset.
+    " 1. Instanciar tu clase motor global
+    DATA(lo_gestor) = NEW zcl_fiaf27_solpedaf( ).
+    TYPES: BEGIN OF ty_asset_cc,
+             asset TYPE anln1,
+             cc    TYPE  ebkn-kostl,
+           END OF ty_asset_cc,
+           ty_t_asset_cc TYPE STANDARD TABLE OF ty_asset_cc WITH EMPTY KEY.
+    " Variables auxiliares para la selección fresca
+    DATA: lt_rng_banfn    TYPE zcl_fiaf27_solpedaf=>tr_banfn,
+          lt_rng_bnfpo    TYPE zcl_fiaf27_solpedaf=>tr_bnfpo,
+          lt_fresh_data   TYPE zcl_fiaf27_solpedaf=>ty_t_purchase_req,
+          lv_net_value    TYPE p LENGTH 15 DECIMALS 9,
+          lv_quantity_int TYPE i,
+          lv_msg          TYPE string,
+          lv_asset        TYPE anln1,
+          lt_asset_cc     TYPE  ty_t_asset_cc,
+          lv_assignments  TYPE ebkn-zebkn.
+
+
+    LOOP AT keys INTO DATA(ls_key). "sirve para ir fila a fila de las que se ha saeleccionado.
+
+      " -----------------------------------------------------------------------
+      " PASO A: Preparar filtro para buscar el dato REAL en SAP
+      " -----------------------------------------------------------------------
+      CLEAR: lt_rng_banfn,lt_rng_bnfpo.
+*     APPEND VALUE #( sign = 'I' option = 'EQ' low = ls_key-%param-PurchaseRequisition ) TO lt_rng_banfn. "commented by srividwan
+      APPEND VALUE #( sign = 'I' option = 'EQ' low = ls_key-purchaserequisition ) TO lt_rng_banfn. "inserted by srividwan
+      APPEND VALUE #( sign = 'I' option = 'EQ' low = ls_key-purchaserequisitionitem ) TO lt_rng_bnfpo.
+      " -----------------------------------------------------------------------
+      " PASO B: Leer datos frescos de la CDS Estándar (EBAN)
+      " -----------------------------------------------------------------------
+      " Llamamos al método de selección de tu clase global
+      lt_fresh_data = lo_gestor->select_data_from_main_cds(
+          iv_banfn = lt_rng_banfn
+          iv_bnfpo = lt_rng_bnfpo
+          iv_knttp = ''
+          " No pasamos más filtros para asegurarnos de traer la solped aunque haya cambiado de centro
+      ).
+*      select
+*      max( PurchaseReqnAcctAssgmtNumber )
+*      from @lt_fresh_data as lt WHERE purchaserequisitionitem = @ls_key-PurchaseRequisitionItem
+*      into @DATA(lv_max_aanumber)." select statement Inserted by srividwan
+      "  SORT lt_fresh_data BY purchasereqnacctassgmtnumber DESCENDING.
+      DATA(lv_last) = lines( lt_fresh_data ).
+      " data(ls_fresh_req) = lt_fresh_data[ 1 ].
+      lv_assignments = lt_fresh_data[ lv_last ]-purchasereqnacctassgmtnumber.
+
+      IF lt_fresh_data IS NOT INITIAL.
+        LOOP AT lt_fresh_data INTO DATA(ls_fresh_req).
+          "=========
+
+          " -----------------------------------------------------------------------
+          " PASO C: Buscar nuestra posición específica en los datos frescos
+          " -----------------------------------------------------------------------
+          " READ TABLE lt_fresh_data INTO DATA(ls_fresh_req) commented by srividwan
+          "   WITH KEY purchaserequisitionitem = ls_key-%param-PurchaseRequisitionItem."commented by srividwan
+          "  WITH KEY purchaserequisitionitem = ls_key-PurchaseRequisitionItem."inserted by srividwan
+          " IF sy-subrc <> 0.
+          " CASO CRÍTICO: La Solped existe en Z, pero ya no existe en EBAN (se borró o cambió)
+          " O ya no cumple los filtros de la CDS (ej: ya no es imputación 'Y')
+          " Aquí deberíamos devolver un error o borrar la entrada de la Z.
+          "   CONTINUE.
+          "ENDIF.
+
+          " -----------------------------------------------------------------------
+          " A PARTIR DE AQUÍ USAMOS ls_fresh_req (DATOS FRESCOS), NO ls_key
+          " -----------------------------------------------------------------------
+
+          " 3. Cargar datos maestros masivamente para esta línea (Usando datos frescos)
+          lo_gestor->select_data_for_assets( VALUE #( ( ls_fresh_req ) ) ).
+
+          " 4. Validar la posición (Usando datos frescos)
+          DATA: lv_valid TYPE char1.
+
+          lo_gestor->delete_from_final_table(
+                    EXPORTING
+                    iv_pr = ls_fresh_req-purchaserequisition
+                    iv_item = ls_fresh_req-purchaserequisitionitem
+                    ).
+
+          lo_gestor->validate_assets(
+            EXPORTING is_purchase_req = ls_fresh_req  " <--- CAMBIO AQUÍ
+            RECEIVING rv_is_valid     = lv_valid
+          ).
+
+          IF lv_valid = 'X'.
+
+
+            " B) PREPARAR TABLAS BAPI (Items)
+*    ls_fresh_req-accountassigmentcategory ='A'.
+
+
+            " C) DESGLOSE Y CREACIÓN ACTIVOS
+            IF ls_fresh_req-quantity > 0.
+              lv_net_value = ls_fresh_req-purreqnnetamount / ls_fresh_req-quantity.
+              lv_quantity_int = ls_fresh_req-quantity.
+            ELSE.
+              lv_net_value = 0.
+              lv_quantity_int = 1.
+            ENDIF.
+
+*            DO lv_quantity_int TIMES.
+*
+*              " 5. Crear Activo Fijo Financiero
+*              DATA:
+*                lv_sub_num TYPE anln2,
+*                lt_return  TYPE zcl_fiaf27_solpedaf=>ty_t_return.
+*
+*
+*              lo_gestor->create_single_asset(
+*                 EXPORTING
+*                    is_purchase_req = ls_fresh_req
+*                    iv_commit       = ' '
+*                 IMPORTING
+*                    ev_asset        = lv_asset
+*                    ev_sub_num      = lv_sub_num
+*                    et_return       = lt_return
+*              ).
+*              APPEND VALUE #( asset = lv_asset cc = ls_fresh_req-costcenter ) TO lt_asset_cc.
+*
+*              IF lt_return IS NOT INITIAL.
+*
+*                READ TABLE lt_return INTO DATA(ls_return) INDEX 1.
+*                lv_msg = ls_return-message.
+*
+*                lo_gestor->add_to_final_table(
+*                   is_purchase_req = ls_fresh_req
+*                   iv_msg          = lv_msg
+*                ).
+*
+*              ENDIF.
+*
+*            ENDDO.
+            " appended to global internal table after validations are okay.
+            APPEND ls_fresh_req TO lsc_zcds_fiaf27_errores=>gt_pr_data.
+          ENDIF.
+        ENDLOOP.
+
+        " 6. Devolver el número de activo al JavaScript
+        "Begin of comment by srividwan
+*        IF lt_asset_cc IS NOT INITIAL.
+*          DATA: lt_upd_item          TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\purchaserequisitionitem,
+*               lt_upd_acctassgnment TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\purreqnitmaccountassignment,
+*                lt_cr_acctassgnment  TYPE TABLE FOR CREATE i_purchaserequisitiontp\\purchaserequisitionitem\_PurchaseReqnAcctAssgmt.
+*
+*          APPEND VALUE #( %tky = VALUE #(
+*          PurchaseRequisition = ls_fresh_req-PurchaseRequisition
+*          PurchaseRequisitionItem = ls_fresh_req-PurchaseRequisitionItem )
+*          accountassignmentcategory = 'A'
+*          multipleacctassgmtdistribution = ''
+*          %control-AccountAssignmentCategory = if_abap_behv=>mk-on
+*          %control-MultipleAcctAssgmtDistribution = if_abap_behv=>mk-on
+*           ) TO lt_upd_item.
+*
+*          lt_upd_acctassgnment = VALUE #( FOR ls_asset_cc IN lt_asset_cc INDEX INTO lv_iddx FROM 1 TO lv_assignments (
+*          %tky = VALUE #(
+*          purchaserequisition = ls_fresh_req-purchaserequisition
+*          purchaserequisitionitem = ls_fresh_req-purchaserequisitionitem
+*          PurchaseReqnAcctAssgmtNumber = lv_iddx )
+*         " CostCenter = ls_asset_cc-cc
+*        "  BaseUnit = 'ST'
+*          Quantity = 1
+*          MasterFixedAsset = ls_asset_cc-asset
+*         " %control-BaseUnit = if_abap_behv=>mk-on
+*          %control-Quantity = if_abap_behv=>mk-on
+*          %control-MasterFixedAsset = if_abap_behv=>mk-on
+*        "  %control-CostCenter = if_abap_behv=>mk-on
+*           ) ).
+*
+*          data(lv_cnt) = lv_assignments + 1.
+*          data(lv_lines) = lines( lt_asset_cc ).
+*
+*          lt_cr_acctassgnment = VALUE #( (
+*          purchaserequisition = ls_fresh_req-purchaserequisition
+*          purchaserequisitionitem = ls_fresh_req-purchaserequisitionitem
+*          %target = VALUE #( FOR ls_asset_cc IN lt_asset_cc INDEX INTO lv_idx FROM lv_cnt TO lv_lines (
+*          %cid = |{ lv_idx }|
+*         " CostCenter = ls_asset_cc-cc
+*          MasterFixedAsset = ls_asset_cc-asset
+*        "  BaseUnit = 'ST'
+*          Quantity = 1
+*
+*          ) )
+*           ) ).
+*
+*
+*
+*
+*          MODIFY ENTITIES OF i_purchaserequisitiontp
+*            ENTITY purchaserequisitionitem
+*            UPDATE FIELDS ( AccountAssignmentCategory MultipleAcctAssgmtDistribution ) WITH lt_upd_item
+*            ENTITY purreqnitmaccountassignment
+*            UPDATE FIELDS ( MasterFixedAsset Quantity ) WITH lt_upd_acctassgnment
+*            ENTITY purchaserequisitionitem
+*            CREATE BY \_purchasereqnacctassgmt  FIELDS ( Quantity MasterFixedAsset ) WITH lt_cr_acctassgnment
+*            FAILED data(lt_failed_new)
+*            REPORTED data(lt_reported_new).
+        "End of comment by srividwan
+
+*          CONSTANTS: lc_dest TYPE c LENGTH 23 VALUE 'ZRFC_FIAF27_API_PUR_REQ'.
+*          " DATA: lo_pr_update TYPE REF TO zcl_fiaf27_solpedaf.
+*          lo_gestor->update_purchase_requisition(
+*           EXPORTING
+*            iv_rfc_dest  = lc_dest
+*            iv_pr        = ls_fresh_req-purchaserequisition
+*            iv_pr_item   = ls_fresh_req-purchaserequisitionitem
+*            iv_aa_number = ls_fresh_req-purchasereqnacctassgmtnumber
+*            iv_aa_cat    = ls_fresh_req-accountassignmentcategory
+*            iv_asset     = lt_asset_cc
+*            iv_isocode   = ls_fresh_req-baseunitisocode
+*            iv_assignments = lv_assignments
+*            RECEIVING ev_res = DATA(lv_res)
+
+*          ).
+
+
+*          IF lv_res(3) >= '200' AND lv_res(3) < '300'.
+*            "ÉXITO: el activo se creó y la solped se actualizo correctamente
+        "Begin of comment by srividwan
+*                IF failed IS INITIAL.
+*            APPEND VALUE #( %tky = ls_key-%tky
+*                            %param = VALUE #( masterfixedasset = lv_asset )
+*                           ) TO result.
+*
+*            APPEND VALUE #( %tky = ls_key-%tky
+*                            %msg = NEW_MESSAGE( ID = 'ZMSG_FIAF27'
+*                            number = 000
+*                            severity = if_abap_behv_message=>severity-success
+*
+*                             )
+*
+*                           ) TO reported-errores.
+*
+**
+*          ENDIF.
+        "End of comment by srividwan
+
+*            " FALLO: el activo se creo, pero la actualizacion de la solped fallo
+*
+*            " Recuperamos el mensaje de error de la BAPI.
+*            DATA(lv_msg_api) = |Error API Solped (Status { lv_res(3) }):{ lv_res }|.
+*
+*            " GUARDAMOS/ACTUALIZAMOS LA TABLA Z
+*            lo_gestor->add_to_final_table(
+*               is_purchase_req = ls_fresh_req
+*               iv_msg          = lv_msg_api
+*            ).
+*          ENDIF.
+
+        " ENDIF.
+
+      ENDIF.
+
+    ENDLOOP.
+  ENDMETHOD.
+
+* METHOD logerror.
+*    DATA(lo_gestor) = NEW zcl_fiaf27_solpedaf( ).
+*
+*    LOOP AT keys INTO DATA(ls_key).
+*
+*      " Mapeo exacto basado en tu estructura TY_PURCHASE_REQ
+*      DATA(ls_req) = VALUE zcl_fiaf27_solpedaf=>ty_purchase_req(
+*          purchaserequisition          = ls_key-%param-PurchaseRequisition
+*          purchaserequisitionitem      = ls_key-%param-PurchaseRequisitionItem
+*          purchaserequisitiontype      = ls_key-%param-DocumentType
+*          supplier                     = ls_key-%param-Supplier
+*          material                     = ls_key-%param-Material
+*          purchasinggroup              = ls_key-%param-PurchasingGroup
+*          plant                        = ls_key-%param-Plant
+*          purreqnitemcurrency          = ls_key-%param-Currency
+*          accountassigmentcategory   = ls_key-%param-AccountAssignmentCat
+*          costcenter                   = ls_key-%param-CostCenter
+*          masterfixedasset             = ls_key-%param-MasterFixedAsset
+*          quantity                     = ls_key-%param-Quantity
+*          purreqnnetamount             = ls_key-%param-NetAmount        " <--- El Importe
+*          wbselementinternalid         = ls_key-%param-WBSElement       " <--- El PEP
+*          " purchasereqnacctassgmtnumber = (No suele aplicar al loguear el error inicial)
+*          comentario                   = ls_key-%param-ErrorMessage
+*      ).
+*
+*      " Llamada para guardar en Z
+*      lo_gestor->add_to_final_table(
+*        is_purchase_req = ls_req
+*        iv_msg          = ls_key-%param-ErrorMessage
+*      ).
+*
+*    ENDLOOP.
+*  ENDMETHOD.
+
+  METHOD createonlyasset.
+
+  DATA : lt_result TYPE TABLE OF Zttasset_create_out,
+         lt_return TYPE bapiret2_t.
+
+         LOOP AT keys INTO DATA(ls_key).
+
+         "Read data from entity
+         READ ENTITIES of zcds_fiaf27_errores
+         IN LOCAL MODE
+         ENTITY errores
+         ALL FIELDS WITH
+         CORRESPONDING #( keys )
+         RESULT DATA(lt_data).
+
+         LOOP AT lt_data INTO DATA(ls_data).
+
+         "CALLING FUNCTION mODULE
+         call FUNCTION 'ZFM_ASSET_CR_UPD'
+
+         EXPORTING
+         iv_pr = ls_data-PurchaseRequisition
+         iv_pr_item = ls_data-PurchaseRequisitionItem
+         iv_quantity = ls_data-Quantity
+         iv_costcenter = ls_data-CostCenter
+         IMPORTING
+         et_result = lt_result
+         et_return = lt_return.
+
+         "check asset creation success
+
+         READ TABLE lt_return INTO DATA(ls_ret) WITH KEY TYPE = 'E'.
+
+         IF sy-subrc = 0.
+
+         APPEND VALUE #(
+         %tky = ls_key-%tky
+         %msg = new_message(
+         id = 'ZMSG'
+         number = '001'
+         severity = if_abap_behv_message=>severity-error
+         V1 = ls_ret-message )
+         ) TO reported-errores.
+         CONTINUE.
+         ENDIF.
+
+         DATA(lt_assets) = lt_result.
+
+         ENDLOOP.
+         ENDLOOP.
+
+
+
+  ENDMETHOD.
+
+ENDCLASS.
