@@ -1,0 +1,357 @@
+FUNCTION zfm_asset_cr_and_pr_upd.
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  IMPORTING
+*"     VALUE(IV_PR) TYPE  I_PURCHASEREQUISITIONITEM-PURCHASEREQUISITION
+*"     VALUE(IV_PR_ITEM) TYPE
+*"        I_PURCHASEREQUISITIONITEM-PURCHASEREQUISITIONITEM
+*"     VALUE(IV_QUANTITY) TYPE  EBKN-MENGE
+*"     VALUE(IV_DESCRIPTION) TYPE  ZTACTIVOS_FIJOS-COMENTARIO
+*"     VALUE(IV_COSTCENTER) TYPE  KOSTL OPTIONAL
+*"     VALUE(IV_DEP_KEY) TYPE  AFASL OPTIONAL
+*"     VALUE(IV_ULIFE_YRS) TYPE  ANLB-NDJAR OPTIONAL
+*"     VALUE(IV_ISOCODE) TYPE
+*"        A_PURCHASEREQUISITIONITEM_2-BASEUNITISOCODE OPTIONAL
+*"     VALUE(IV_RFC_DEST) TYPE  RFCDEST OPTIONAL
+*"     VALUE(IV_ASSIGN) TYPE  EBKN-ZEBKN OPTIONAL
+*"  EXPORTING
+*"     VALUE(ET_RESULT) TYPE  ZTTASSET_CREATE_OUT
+*"     VALUE(ET_RETURN) TYPE  ZTT_BAPIRET2
+*"  TABLES
+*"      IT_CC_SPLIT STRUCTURE  ZTY_CC_SPLIT
+*"----------------------------------------------------------------------
+
+
+  DATA: lo_obj TYPE REF TO zcl_fiaf27_solpedaf.
+
+  CREATE OBJECT lo_obj.
+
+*--------------------------------------
+
+* Local Types
+
+*--------------------------------------
+
+  TYPES: BEGIN OF ty_asset,
+
+           asset TYPE anln1,
+
+           cc    TYPE kostl,
+
+         END OF ty_asset.
+
+*--------------------------------------
+
+* Data Declarations
+
+*--------------------------------------
+
+  DATA: lt_asset TYPE zcl_fiaf27_solpedaf=>ty_t_asset,
+
+        ls_asset TYPE zcl_fiaf27_solpedaf=>ty_asset.
+
+  DATA: lt_purchase_req TYPE zcl_fiaf27_solpedaf=>ty_t_purchase_req,
+
+        ls_purchase_req TYPE zcl_fiaf27_solpedaf=>ty_purchase_req,
+
+        ls_eban         TYPE eban.
+
+  DATA: lv_asset TYPE anln1,
+
+        lv_sub   TYPE anln2,
+
+        lt_ret   TYPE bapiret2_t,
+
+        ls_ret   TYPE bapiret2,
+
+        lv_status TYPE char1.
+
+*--------------------------------------
+
+* Validation
+
+*--------------------------------------
+
+  IF iv_quantity <= 0.
+
+    APPEND VALUE #( type = 'E' message = 'Invalid quantity' ) TO et_return.
+
+    RETURN.
+
+  ENDIF.
+
+*--------------------------------------
+
+* Fetch PR Data
+
+*--------------------------------------
+
+  SELECT SINGLE werks, matnr
+
+    INTO (@ls_eban-werks, @ls_eban-matnr)
+
+    FROM eban
+
+    WHERE banfn = @iv_pr
+
+      AND bnfpo = @iv_pr_item.
+
+  IF sy-subrc <> 0.
+
+    APPEND VALUE #( type = 'E' message = 'PR data not found' ) TO et_return.
+
+    RETURN.
+
+  ENDIF.
+
+*--------------------------------------
+
+* Prepare Structure
+
+*--------------------------------------
+
+  ls_purchase_req-plant    = ls_eban-werks.
+
+  ls_purchase_req-material = ls_eban-matnr.
+
+  APPEND ls_purchase_req TO lt_purchase_req.
+
+*--------------------------------------
+
+* Load Master Data
+
+*--------------------------------------
+
+  lo_obj->select_data_for_assets(
+
+    EXPORTING
+
+      it_purchase_req = lt_purchase_req
+
+  ).
+
+*--------------------------------------
+
+* Asset Creation with Split
+
+*--------------------------------------
+
+  LOOP AT it_cc_split INTO DATA(ls_cc).
+
+    DO ls_cc-qty TIMES.
+
+      CLEAR: lv_asset, lv_sub, lt_ret, ls_ret, lv_status.
+
+      ls_purchase_req-costcenter = ls_cc-costcenter.
+
+      CALL METHOD lo_obj->create_single_asset
+
+        EXPORTING
+
+          is_purchase_req = ls_purchase_req
+
+*          iv_commit       = space
+
+        IMPORTING
+
+          ev_asset        = lv_asset
+
+          ev_sub_num      = lv_sub
+
+          et_return       = lt_ret.
+
+*--------------------------------------
+
+* Error Handling
+
+*--------------------------------------
+
+      lv_status = 'S'.
+
+      READ TABLE lt_ret INTO ls_ret WITH KEY type = 'E'.
+
+      IF sy-subrc <> 0.
+
+        READ TABLE lt_ret INTO ls_ret WITH KEY type = 'A'.
+
+      ENDIF.
+
+      IF sy-subrc <> 0.
+
+        READ TABLE lt_ret INTO ls_ret WITH KEY type = 'X'.
+
+      ENDIF.
+
+      IF sy-subrc = 0.
+
+        lv_status = 'E'.
+
+      ENDIF.
+
+*--------------------------------------
+
+* Append Result
+
+*--------------------------------------
+
+      APPEND VALUE zsasset_create_out(
+
+        asset     = lv_asset
+
+        subnumber = lv_sub
+
+        status    = lv_status
+
+        message   = COND #( WHEN ls_ret IS NOT INITIAL THEN ls_ret-message ELSE 'Created successfully' )
+
+      ) TO et_result.
+
+      APPEND LINES OF lt_ret TO et_return.
+
+*--------------------------------------
+
+* Collect Successful Assets
+
+*--------------------------------------
+
+      IF lv_status = 'S' AND lv_asset IS NOT INITIAL.
+
+        CLEAR ls_asset.
+
+        ls_asset-asset = lv_asset.
+
+        ls_asset-cc    = ls_cc-costcenter.
+
+        APPEND ls_asset TO lt_asset.
+
+      ENDIF.
+
+    ENDDO.
+
+  ENDLOOP.
+
+*--------------------------------------
+
+* Validate Asset Creation
+
+*--------------------------------------
+
+  IF lt_asset IS INITIAL.
+
+    APPEND VALUE #( type = 'E' message = 'Asset creation failed. PR not updated.' ) TO et_return.
+
+   RETURN.
+   else.
+       APPEND VALUE #( type = 'S' message = 'Asset creation Suceesful.' ) TO et_return.
+
+  ENDIF.
+
+*--------------------------------------
+
+* Commit
+
+*--------------------------------------
+
+*  CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+*
+*    EXPORTING
+*
+*      wait = 'X'.
+
+*--------------------------------------
+
+* PR Update
+
+*--------------------------------------
+
+  DATA lv_res TYPE string.
+  data lv_ebkn_count type EBKN-ZEBKN.
+*----------------------------------------------------
+*  calculating the assignments
+*----------------------------------------------------
+
+  SELECT count(*) into lv_ebkn_count
+    from ebkn
+    where banfn = iv_pr
+    and bnfpo = iv_pr_item.
+
+    data lv_body type string.
+
+  CALL METHOD lo_obj->update_Purchase_requisition
+
+    EXPORTING
+
+      iv_pr          = iv_pr
+
+      iv_pr_item     = iv_pr_item
+
+*      iv_aa_cat      = 'A'
+*
+*      iv_aa_number   = iv_assign
+
+      iv_asset       = lt_asset
+
+      iv_isocode     = iv_isocode
+
+      iv_rfc_dest    = 'ZRFC_FIAF27_API_PUR_REQ'
+
+      iv_assignments = lv_ebkn_count
+
+     IMPORTING
+
+      ev_body = lv_body
+
+    RECEIVING
+
+      ev_res         = lv_res.
+
+*--------------------------------------
+
+* Check PR Update
+
+*--------------------------------------
+
+if lv_body is not INITIAL.
+  APPEND VALUE #( type = 'S' message = lv_body ) TO et_return.
+  ENDIF.
+
+
+  DATA lv_pr_success TYPE abap_bool VALUE abap_true.
+
+  IF lv_res IS INITIAL OR lv_res(3) < '200' OR lv_res(3) >= '300'.
+
+    lv_pr_success = abap_false.
+
+  ENDIF.
+
+*--------------------------------------
+*
+* Store Failed Updates
+*
+*--------------------------------------
+
+  IF lv_pr_success = abap_false.
+
+    DATA ls_z TYPE ZTACTIVOS_FIJOS.
+
+    LOOP AT lt_asset INTO ls_asset.
+
+      CLEAR ls_z.
+
+      ls_z-banfn        = iv_pr.
+
+      ls_z-bnfpo    = iv_pr_item.
+
+      ls_z-anln1    = ls_asset-asset.
+
+      ls_z-kostl = ls_asset-cc.
+
+      ls_z-last_changed_at = sy-datum.
+
+      INSERT ZTACTIVOS_FIJOS FROM ls_z.
+
+    ENDLOOP.
+
+  ENDIF.
+
+ENDFUNCTION.
