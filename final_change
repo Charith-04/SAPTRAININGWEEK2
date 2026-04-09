@@ -112,3 +112,141 @@ LOOP AT lt_return_all INTO ls_ret
  
 ENDLOOP.
  
+*--------------------------------------
+
+* Show messages per PR item group
+
+*--------------------------------------
+
+LOOP AT lt_group INTO ls_group.
+ 
+  " Reset counts for each group
+
+  DATA(lv_success_count) TYPE i.
+
+  DATA(lv_error_count)   TYPE i.
+ 
+  " Count assets for THIS group only
+
+  LOOP AT lt_result_all INTO DATA(ls_result)
+
+    WHERE pr      = ls_group-pr
+
+    AND   pr_item = ls_group-pr_item.
+ 
+    IF ls_result-status = 'S'.
+
+      lv_success_count = lv_success_count + 1.
+
+    ELSE.
+
+      lv_error_count = lv_error_count + 1.
+
+    ENDIF.
+ 
+  ENDLOOP.
+ 
+  " Strip leading zeros from PR number
+
+  DATA(lv_pr_display) TYPE string.
+
+  lv_pr_display = ls_group-pr.
+
+  SHIFT lv_pr_display LEFT DELETING LEADING '0'.
+ 
+  " Strip leading zeros from PR item
+
+  DATA(lv_item_display) TYPE string.
+
+  lv_item_display = ls_group-pr_item.
+
+  SHIFT lv_item_display LEFT DELETING LEADING '0'.
+ 
+  " Asset creation summary
+
+  IF lv_success_count > 0.
+
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+               severity = if_abap_behv_message=>severity-success
+
+               text     = |PR { lv_pr_display } / Item { lv_item_display }: | &&
+
+                          |{ lv_success_count } asset(s) created successfully| )
+
+    ) TO reported-errores.
+
+  ENDIF.
+ 
+  IF lv_error_count > 0.
+
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+               severity = if_abap_behv_message=>severity-error
+
+               text     = |PR { lv_pr_display } / Item { lv_item_display }: | &&
+
+                          |{ lv_error_count } asset(s) failed to create| )
+
+    ) TO reported-errores.
+
+  ENDIF.
+ 
+ENDLOOP.
+ 
+*--------------------------------------
+
+* SAP PR update message - once only
+
+*--------------------------------------
+
+DATA lv_sap_msg_shown TYPE abap_bool VALUE abap_false.
+ 
+LOOP AT lt_return_all INTO DATA(ls_ret)
+
+  WHERE type = 'S' AND message CS 'solicitud'.
+ 
+  IF lv_sap_msg_shown = abap_false.
+
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+               severity = if_abap_behv_message=>severity-success
+
+               text     = ls_ret-message )
+
+    ) TO reported-errores.
+
+    lv_sap_msg_shown = abap_true.
+
+  ENDIF.
+ 
+ENDLOOP.
+ 
+*--------------------------------------
+
+* Errors from PR update - once only
+
+*--------------------------------------
+
+LOOP AT lt_return_all INTO ls_ret
+
+  WHERE type = 'E' OR type = 'A'.
+ 
+  APPEND VALUE #(
+
+    %msg = new_message_with_text(
+
+             severity = if_abap_behv_message=>severity-error
+
+             text     = ls_ret-message )
+
+  ) TO reported-errores.
+ 
+ENDLOOP.
+ 
