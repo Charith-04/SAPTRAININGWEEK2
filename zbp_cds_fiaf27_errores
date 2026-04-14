@@ -13,8 +13,7 @@ CLASS lsc_zcds_fiaf27_errores DEFINITION INHERITING FROM cl_abap_behavior_saver.
 ENDCLASS.
 
 CLASS lsc_zcds_fiaf27_errores IMPLEMENTATION.
-
-  METHOD save_modified.
+METHOD save_modified.
 
   DATA: lt_return TYPE ztt_bapiret2,
 
@@ -93,7 +92,6 @@ CLASS lsc_zcds_fiaf27_errores IMPLEMENTATION.
       ) TO <ls_group>-cc_split.
 
 
-
     ELSE.
 
       CLEAR ls_group.
@@ -133,15 +131,15 @@ CLASS lsc_zcds_fiaf27_errores IMPLEMENTATION.
   DATA: lt_return_all TYPE ztt_bapiret2,
 
         lt_result_all TYPE zttasset_create_out.
+
       DATA: lt_return_fm TYPE ztt_bapiret2,
 
           lt_result_fm TYPE zttasset_create_out.
+
 *  DATA(lo_api) = NEW zcl_fiaf27_solpedaf( ).
 
 
-
   LOOP AT lt_group INTO ls_group.
-
 
 
     CALL FUNCTION 'ZFM_ASSET_CR_AND_PR_UPD' DESTINATION 'NONE'
@@ -161,36 +159,55 @@ CLASS lsc_zcds_fiaf27_errores IMPLEMENTATION.
         iv_assign      = ls_group-assign
 
 
-
       IMPORTING
 
         et_return      = lt_return_fm
 
         et_result      = lt_result_fm
+
           TABLES
 
         it_cc_split    = ls_group-cc_split.   " <-- NEW
+
 *        EXCEPTIONS
+
 *        system_FAILURE = 1 MESSAGE lv_rfc_msg
+
 *        commUNICATION_FAILURE = 2 MESSAGE lv_rfc_msg
+
 *        resource_failure = 3
+
 *        otHERS = 4.
 
 
 *lo_api->update_purchase_requisition(
+
 *  EXPORTING
+
 *    iv_rfc_dest    = 'ZRFC_FIAF27_API_PUR_REQ'
+
 *    iv_pr          = ls_group-pr
+
 *    iv_pr_item     = ls_group-pr_item
+
 **    iv_aa_cat      =
+
 **    iv_aa_number   =
+
 *    iv_asset       =
+
 *    iv_isocode     =
+
 *    iv_assignments =
+
 **  IMPORTING
+
 **    ev_body        =
+
 **  RECEIVING
+
 **    ev_res         =
+
 *).
 
     APPEND LINES OF lt_return_fm TO lt_return_all.
@@ -206,26 +223,370 @@ CLASS lsc_zcds_fiaf27_errores IMPLEMENTATION.
 
 *  CLEAR gt_pr_data.
 
-LOOP AT lt_return_all INTO DATA(ls_return).
-DATA(lv_severity) = COND #(
-WHEN ls_return-type = 'E' OR ls_return-type = 'A' THEN if_abap_behv_message=>severity-error
-WHEN ls_return-type = 'W' THEN if_abap_behv_message=>severity-warning
-ELSE if_abap_behv_message=>severity-success
-).
-DATA(lo_msg) = new_message( id = ls_return-id number = ls_return-number severity = lv_severity
-v1 =  ls_return-message
-v2 = ls_return-message_v1
-v3 = ls_return-message_v2
-v4 = ls_return-message_v3 ).
+*LOOP AT lt_return_all INTO DATA(ls_return).
+*
+*DATA(lv_severity) = COND #(
+*
+*WHEN ls_return-type = 'E' OR ls_return-type = 'A' THEN if_abap_behv_message=>severity-error
+*
+*WHEN ls_return-type = 'W' THEN if_abap_behv_message=>severity-warning
+*
+*ELSE if_abap_behv_message=>severity-success
+*
+*).
+*
+*DATA(lo_msg) = new_message_with_text(  severity = lv_severity
+*
+*text =  ls_return-message
+*
+* ).
+*
+*APPEND value #( %msg = lo_msg ) TO reported-errores.
+*
+*ENDLOOP.
 
-APPEND value #( %msg = lo_msg ) TO reported-errores.
 
-ENDLOOP.
     "data(lo_dest) = cl_bgmc_process_factory
 
-CLEAR gt_pr_data.
+*CLEAR gt_pr_data.
+*--------------------------------------
+
+* Show messages per PR item group
+
+*--------------------------------------
+
+LOOP AT lt_group INTO ls_group.
+
+  " Reset counts for each group
+
+  DATA lv_success_count TYPE i.
+
+  DATA lv_error_count   TYPE i.
+
+  " Count assets for THIS group only
+
+  LOOP AT lt_result_all INTO DATA(ls_result).
+
+
+    IF ls_result-status = 'S'.
+
+      lv_success_count = lv_success_count + 1.
+
+    ELSE.
+
+      lv_error_count = lv_error_count + 1.
+
+    ENDIF.
+
+  ENDLOOP.
+
+  " Strip leading zeros from PR number
+
+  DATA lv_pr_display TYPE string.
+
+  lv_pr_display = ls_group-pr.
+
+  SHIFT lv_pr_display LEFT DELETING LEADING '0'.
+
+  " Strip leading zeros from PR item
+
+  DATA lv_item_display TYPE string.
+
+  lv_item_display = ls_group-pr_item.
+
+  SHIFT lv_item_display LEFT DELETING LEADING '0'.
+
+  " Asset creation summary
+
+  IF lv_success_count > 0.
+
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+               severity = if_abap_behv_message=>severity-success
+
+               text     = |PR { lv_pr_display } / Item { lv_item_display }: | &&
+
+                          |assets created successfully| )
+
+    ) TO reported-errores.
+
+  ENDIF.
+
+  IF lv_error_count > 0.
+
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+               severity = if_abap_behv_message=>severity-error
+
+               text     = |PR { lv_pr_display } / Item { lv_item_display }: | &&
+
+                          |{ lv_error_count } asset(s) failed to create| )
+
+    ) TO reported-errores.
+
+  ENDIF.
+
+ENDLOOP.
+
+*--------------------------------------
+
+* SAP PR update message - once only
+
+*--------------------------------------
+
+DATA lv_sap_msg_shown TYPE abap_bool VALUE abap_false.
+
+LOOP AT lt_return_all INTO DATA(ls_ret)
+
+  WHERE type = 'S' AND message CS 'solicitud'.
+
+  IF lv_sap_msg_shown = abap_false.
+
+    APPEND VALUE #(
+
+      %msg = new_message_with_text(
+
+               severity = if_abap_behv_message=>severity-success
+
+               text     = ls_ret-message )
+
+    ) TO reported-errores.
+
+    lv_sap_msg_shown = abap_true.
+
+  ENDIF.
+
+ENDLOOP.
+
+*--------------------------------------
+
+* Errors from PR update - once only
+
+*--------------------------------------
+
+LOOP AT lt_return_all INTO ls_ret
+
+  WHERE type = 'E' OR type = 'A'.
+
+  APPEND VALUE #(
+
+    %msg = new_message_with_text(
+
+             severity = if_abap_behv_message=>severity-error
+
+             text     = ls_ret-message )
+
+  ) TO reported-errores.
+
+ENDLOOP.
+
 
   ENDMETHOD.
+
+
+*METHOD save_modified.
+*
+*  DATA: lt_return TYPE ztt_bapiret2,
+*
+*        lt_result TYPE zttasset_create_out.
+*
+**--------------------------------------
+*
+** Types
+*
+**--------------------------------------
+*
+*  TYPES: BEGIN OF ty_cc_split,
+*
+*           costcenter TYPE kostl,
+*
+*           qty        TYPE ebkn-menge,
+*
+*         END OF ty_cc_split.
+*
+*  TYPES: ty_t_cc_split TYPE STANDARD TABLE OF ty_cc_split WITH EMPTY KEY.
+*
+*  TYPES: BEGIN OF ty_group,
+*
+*           pr          TYPE i_purchaserequisitionitem-purchaserequisition,
+*
+*           pr_item     TYPE i_purchaserequisitionitem-purchaserequisitionitem,
+*
+*           total_qty   TYPE ebkn-menge,
+*
+*           description TYPE ztactivos_fijos-comentario,
+*
+*           isocode     TYPE a_purchaserequisitionitem_2-baseunitisocode,
+*
+*           assign      TYPE ebkn-zebkn,
+*
+*           cc_split    TYPE ty_t_cc_split,
+*
+*         END OF ty_group.
+*
+*  DATA: lt_group TYPE STANDARD TABLE OF ty_group,
+*
+*        ls_group TYPE ty_group.
+*
+**--------------------------------------
+*
+** Build grouping + split
+*
+**--------------------------------------
+*
+*  LOOP AT gt_pr_data INTO DATA(ls_data).
+*
+*    READ TABLE lt_group ASSIGNING FIELD-SYMBOL(<ls_group>)
+*
+*      WITH KEY pr      = ls_data-purchaserequisition
+*
+*               pr_item = ls_data-purchaserequisitionitem.
+*
+*    IF sy-subrc = 0.
+*
+*      <ls_group>-total_qty += ls_data-quantity.
+*
+*      APPEND VALUE #(
+*
+*        costcenter = ls_data-costcenter
+*
+*        qty        = ls_data-quantity
+*
+*      ) TO <ls_group>-cc_split.
+*
+*    ELSE.
+*
+*      CLEAR ls_group.
+*
+*      ls_group-pr          = ls_data-purchaserequisition.
+*
+*      ls_group-pr_item     = ls_data-purchaserequisitionitem.
+*
+*      ls_group-total_qty   = ls_data-quantity.
+*
+*      ls_group-description = ls_data-comentario.
+*
+*      ls_group-isocode     = ls_data-baseunitisocode.
+*
+*      ls_group-assign      = ls_data-purchasereqnacctassgmtnumber.
+*
+*      APPEND VALUE #(
+*
+*        costcenter = ls_data-costcenter
+*
+*        qty        = ls_data-quantity
+*
+*      ) TO ls_group-cc_split.
+*
+*      APPEND ls_group TO lt_group.
+*
+*    ENDIF.
+*
+*  ENDLOOP.
+*
+**--------------------------------------
+*
+** Processing
+*
+**--------------------------------------
+*
+*  DATA: lt_return_fm TYPE ztt_bapiret2,
+*
+*        lt_result_fm TYPE zttasset_create_out.
+*
+*  LOOP AT lt_group INTO ls_group.
+*
+*    CLEAR: lt_return_fm, lt_result_fm.
+*
+*    CALL FUNCTION 'ZFM_ASSET_CR_AND_PR_UPD' DESTINATION 'NONE'
+*
+*      EXPORTING
+*
+*        iv_pr          = ls_group-pr
+*
+*        iv_pr_item     = ls_group-pr_item
+*
+*        iv_quantity    = ls_group-total_qty
+*
+*        iv_description = ls_group-description
+*
+*        iv_isocode     = ls_group-isocode
+*
+*        iv_assign      = ls_group-assign
+*
+*      IMPORTING
+*
+*        et_return      = lt_return_fm
+*
+*        et_result      = lt_result_fm
+*
+*      TABLES
+*
+*        it_cc_split    = ls_group-cc_split.
+*
+**--------------------------------------
+*
+** Pick only ONE message (lv_body from FM)
+*
+**--------------------------------------
+*
+*    READ TABLE lt_return_fm INTO DATA(ls_return) INDEX 1.
+*
+*    DATA(lv_text) = COND string(
+*
+*      WHEN ls_return-message IS NOT INITIAL
+*
+*        THEN ls_return-message
+*
+*      ELSE
+*
+*        |No response|
+*
+*    ).
+*
+*    DATA(lv_severity) = COND #(
+*
+*      WHEN ls_return-type = 'E' OR ls_return-type = 'A'
+*
+*        THEN if_abap_behv_message=>severity-error
+*
+*      ELSE
+*
+*        if_abap_behv_message=>severity-success
+*
+*    ).
+*
+**--------------------------------------
+*
+** Bind message to RAP key
+*
+**--------------------------------------
+*
+*
+*
+*    APPEND VALUE #(
+*
+*      %msg = new_message_with_text(
+*
+*        severity = lv_severity
+*
+*        text = |PR { ls_group-pr } Item { ls_group-pr_item }: { lv_text }|
+*
+*      )
+*
+*    ) TO reported-errores.
+*
+*  ENDLOOP.
+*
+*  CLEAR gt_pr_data.
+*
+*ENDMETHOD.
+*
+
 
 ENDCLASS.
 
@@ -543,57 +904,142 @@ CLASS lhc_errores IMPLEMENTATION.
 
   METHOD createonlyasset.
 
-  DATA : lt_result TYPE TABLE OF Zttasset_create_out,
-         lt_return TYPE bapiret2_t.
 
-         LOOP AT keys INTO DATA(ls_key).
+    DATA : lt_result TYPE zttasset_create_out,
+           lt_return TYPE bapiret2_t.
 
-         "Read data from entity
-         READ ENTITIES of zcds_fiaf27_errores
-         IN LOCAL MODE
-         ENTITY errores
-         ALL FIELDS WITH
-         CORRESPONDING #( keys )
-         RESULT DATA(lt_data).
+            "Read data from entity
+      READ ENTITIES OF zcds_fiaf27_errores
+      IN LOCAL MODE
+      ENTITY errores
+      ALL FIELDS WITH
+      CORRESPONDING #( keys )
+      RESULT DATA(lt_data).
 
-         LOOP AT lt_data INTO DATA(ls_data).
+      if lt_data is initial.
+      return.
+      endif.
 
-         "CALLING FUNCTION mODULE
-         call FUNCTION 'ZFM_ASSET_CR_UPD'
+       LOOP AT lt_data INTO DATA(ls_data).
+        CLEAR: lt_result,lt_return.
 
-         EXPORTING
-         iv_pr = ls_data-PurchaseRequisition
-         iv_pr_item = ls_data-PurchaseRequisitionItem
-         iv_quantity = ls_data-Quantity
-         iv_costcenter = ls_data-CostCenter
-         IMPORTING
-         et_result = lt_result
-         et_return = lt_return.
+         CALL FUNCTION 'ZFM_ASSET_CR_UPD'
+          EXPORTING
+            iv_pr         = ls_data-purchaserequisition
+            iv_pr_item    = ls_data-purchaserequisitionitem
+            iv_quantity   = ls_data-quantity
+            iv_costcenter = ls_data-costcenter
+          IMPORTING
+            et_result     = lt_result
+            et_return     = lt_return.
 
-         "check asset creation success
+READ TABLE lt_return INTO DATA(ls_ret) WITH KEY type = 'E'.
 
-         READ TABLE lt_return INTO DATA(ls_ret) WITH KEY TYPE = 'E'.
+  IF sy-subrc = 0.
+*        "asset creation failed ->send error to ui
+*
+          APPEND VALUE #(
+          %tky = ls_data-%tky
+          %msg = new_message(
+          id = 'ZMSG'
+          number = '001'
+          severity = if_abap_behv_message=>severity-error
+          v1 = ls_ret-message )
+          ) TO reported-errores.
+          CONTINUE.
+        ENDIF.
 
-         IF sy-subrc = 0.
+         "sucess message to UI"
+*
+          APPEND VALUE #(
+          %tky = ls_data-%tky
 
-         APPEND VALUE #(
-         %tky = ls_key-%tky
-         %msg = new_message(
-         id = 'ZMSG'
-         number = '001'
-         severity = if_abap_behv_message=>severity-error
-         V1 = ls_ret-message )
-         ) TO reported-errores.
-         CONTINUE.
-         ENDIF.
+          %msg = new_message(
+          id = 'ZMSG'
+          number = '002'
+          severity = if_abap_behv_message=>severity-success
+          v1 = 'Asset created successfully'  )
+          )  TO reported-errores.
 
-         DATA(lt_assets) = lt_result.
-
-         ENDLOOP.
-         ENDLOOP.
+          endloop.
+*
+*
 
 
 
-  ENDMETHOD.
+*    LOOP AT keys INTO DATA(ls_key).
+*
+*      "Read data from entity
+*      READ ENTITIES OF zcds_fiaf27_errores
+*      IN LOCAL MODE
+*      ENTITY errores
+*      ALL FIELDS WITH
+*      CORRESPONDING #( keys )
+*      RESULT DATA(lt_data).
+*
+*      LOOP AT lt_data INTO DATA(ls_data).
+*        CLEAR: lt_result,lt_return.
+*
+*
+*        "Create asset only
+*
+*        CALL FUNCTION 'ZFM_ASSET_CR_UPD'
+*          EXPORTING
+*            iv_pr         = ls_data-purchaserequisition
+*            iv_pr_item    = ls_data-purchaserequisitionitem
+*            iv_quantity   = ls_data-quantity
+*            iv_costcenter = ls_data-costcenter
+*          IMPORTING
+*            et_result     = lt_result
+*            et_return     = lt_return.
+*
+*        "check error from fm
+*
+*        READ TABLE lt_return INTO DATA(ls_ret) WITH KEY type = 'E'.
+*
+*        IF sy-subrc = 0.
+*        "asset creation failed ->send error to ui
+*
+*          APPEND VALUE #(
+*          %tky = ls_key-%tky
+*          %msg = new_message(
+*          id = 'ZMSG'
+*          number = '001'
+*          severity = if_abap_behv_message=>severity-error
+*          v1 = ls_ret-message )
+*          ) TO reported-errores.
+*          CONTINUE.
+*        ENDIF.
+*
+*
+*
+*
+*
+*          "sucess message to UI"
+*
+*          APPEND VALUE #(
+*          %tky = ls_key-%tky
+*
+*          %msg = new_message(
+*          id = 'ZMSG'
+*          number = '002'
+*          severity = if_abap_behv_message=>severity-success
+*          v1 = 'Asset created successfully'  )
+*          )  TO reported-errores.
+*
+*
+*
+*
+*
+*
+*      ENDLOOP.
+*      endloop.
+
+
+
+
+
+
+    ENDMETHOD.
 
 ENDCLASS.
